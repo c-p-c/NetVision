@@ -1,0 +1,1604 @@
+﻿// 参考：http://asuka-diary.at.webry.info/201007/article_9.html
+
+using System;
+using System.Drawing;
+using System.Text;
+using System.Windows.Forms;
+
+namespace thnetvision
+{
+    public partial class Form1 : Form
+    {
+        // 定数
+        public const int CARDSIZEX = 77;
+        public const int CARDSIZEY = 108;
+
+        // staticでフォームのインスタンスを生成
+        private static Form2 fm2;
+        private static Form3 fm3;
+
+        // 変数
+        private SECTION dragFrom = SECTION.HOMEFIELD;
+        private Point diffPoint;
+        private int selectedCard = -1;
+        public bool dragging;
+        public int draggingCard;
+        // インスタンス
+        private NetvisionCore core = new NetvisionCore();
+        private CardDB[] cardDB = new CardDB[5000];
+        private Bitmap backImg = new Bitmap(@"card\\Library.jpg");
+        private Bitmap lifeImg = new Bitmap(@"LifeCounter.jpg");
+        private PictureBox[] PB = new PictureBox[100];
+        private System.Random rndGenerator = new System.Random();
+
+        //============================== コンストラクタ ==============================
+        public Form1()
+        {
+            InitializeComponent();
+            homeLife.Parent = homeLifePicture;
+            homeLife.Left = homeLifePicture.Width - homeLife.Width;
+            homeLife.Top = homeLifePicture.Height - homeLife.Height;
+        }
+
+        //============================== Form初期化処理 ==============================
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            ReadCardlist();
+
+            for (int i = 0; i < 100; i++)
+            {
+                core.cards[i] = new Card(i, i + 1);
+                core.cards[i].Location = new Point(0, 0);
+            }
+
+            //描画
+            for (int i = 0; i < 100; i++)
+            {
+                // PB[]の初期化
+                PB[i] = new PictureBox();
+                PB[i].BorderStyle = BorderStyle.None;
+                PB[i].SizeMode = PictureBoxSizeMode.Zoom;
+                PB[i].Paint += new PaintEventHandler(this.Card_Paint);
+                PB[i].MouseDown += new MouseEventHandler(this.Card_MouseDown);
+                PB[i].MouseUp += new MouseEventHandler(this.Card_MouseUp);
+                PB[i].MouseMove += new MouseEventHandler(this.Card_MouseMove);
+                PB[i].ContextMenuStrip = contextMenuStrip1;
+                PB[i].Size = new Size(CARDSIZEX, CARDSIZEY);
+                PB[i].Tag = core.cards[i];
+                PB[i].Location = core.cards[i].Location;
+            }
+
+            //tableLayoutPanel1.Enabled = false;
+        }
+
+        //============================== 全て再描画 ==============================
+        private delegate void RedrawAll_Delegate();
+
+        private void RedrawAll()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new RedrawAll_Delegate(RedrawAll));
+                return;
+            }
+
+            int i, j;
+
+            //----------手札の整理----------
+            for (i = 0; i < core.homeHandNum; i++)
+            {
+                //位置
+                int x;
+                double w;
+
+                if (CARDSIZEX * core.homeHandNum <= homeHand.Width - 20)
+                {
+                    x = CARDSIZEX * core.homeHandNum;
+                    w = (double)CARDSIZEX;
+                }
+                else
+                {
+                    x = homeHand.Width - 20;
+                    w = (double)(homeHand.Width - 20 - CARDSIZEX) / (double)(core.homeHandNum - 1);
+                }
+                core.cards[core.homeHandOrder[i]].Location = new Point(homeHand.Width / 2 - x / 2 + (int)((double)i * w), 5);
+                core.cards[core.homeHandOrder[i]].section = SECTION.HOMEHAND; //念のため上書き
+                core.cards[core.homeHandOrder[i]].active = true;
+
+                //重なり順
+                if (core.homeHandOrder[i] == selectedCard)
+                {
+                    for (j = 0; j < core.homeHandNum; j++)
+                    {
+                        PB[core.homeHandOrder[j]].BringToFront();
+                        if (core.homeHandOrder[j] == selectedCard) break;
+                    }
+                    for (j = core.homeHandNum - 1; j >= 0; j--)
+                    {
+                        PB[core.homeHandOrder[j]].BringToFront();
+                        if (core.homeHandOrder[j] == selectedCard) break;
+                    }
+                }
+            }
+
+            //----------手札の整理----------
+            for (i = 0; i < core.awayHandNum; i++)
+            {
+                //位置
+                int x;
+                double w;
+
+                if (CARDSIZEX * core.awayHandNum <= awayHand.Width - 20)
+                {
+                    x = CARDSIZEX * core.awayHandNum;
+                    w = (double)CARDSIZEX;
+                }
+                else
+                {
+                    x = awayHand.Width - 20;
+                    w = (double)(awayHand.Width - 20 - CARDSIZEX) / (double)(core.awayHandNum - 1);
+                }
+                core.cards[core.awayHandOrder[i]].Location = new Point(awayHand.Width / 2 - x / 2 + (int)((double)i * w), 5);
+                core.cards[core.awayHandOrder[i]].section = SECTION.AWAYHAND; //念のため上書き
+                core.cards[core.awayHandOrder[i]].active = true;
+
+                //重なり順
+                if (core.awayHandOrder[i] == selectedCard)
+                {
+                    for (j = 0; j < core.awayHandNum; j++)
+                    {
+                        PB[core.awayHandOrder[j]].BringToFront();
+                        if (core.awayHandOrder[j] == selectedCard) break;
+                    }
+                    for (j = core.awayHandNum - 1; j >= 0; j--)
+                    {
+                        PB[core.awayHandOrder[j]].BringToFront();
+                        if (core.awayHandOrder[j] == selectedCard) break;
+                    }
+                }
+            }
+
+            //----------カードの描画----------
+            for (i = 0; i < 100; i++)
+            {
+                if (core.cards[i].section == SECTION.NONE) { PB[i].Visible = false; }
+                if (core.cards[i].section == SECTION.HOMEFIELD) { PB[i].Parent = homeField; PB[i].Visible = true; }
+                if (core.cards[i].section == SECTION.HOMEHAND) { PB[i].Parent = homeHand; PB[i].Visible = true; }
+                if (core.cards[i].section == SECTION.HOMENODEAREA) { PB[i].Parent = homeNodeArea; PB[i].Visible = true; }
+                if (core.cards[i].section == SECTION.HOMELIBRARY) { PB[i].Visible = false; }
+                if (core.cards[i].section == SECTION.HOMEHADES) { PB[i].Visible = false; }
+                if (core.cards[i].section == SECTION.AWAYFIELD) { PB[i].Parent = awayField; PB[i].Visible = true; }
+                if (core.cards[i].section == SECTION.AWAYHAND) { PB[i].Parent = awayHand; PB[i].Visible = true; }
+                //if (core.cards[i].section == SECTION.AWAYNODEAREA) { PB[i].Parent = awayNodeArea; PB[i].Visible = true; }
+                if (core.cards[i].section == SECTION.AWAYLIBRARY) { PB[i].Visible = false; }
+                if (core.cards[i].section == SECTION.AWAYHADES) { PB[i].Visible = false; }
+
+                PB[i].Location = core.cards[i].Location;
+                PB[i].Size = core.cards[i].active ? new Size(CARDSIZEX, CARDSIZEY) : new Size(CARDSIZEY, CARDSIZEX);
+                PB[i].Refresh();
+            }
+            if (selectedCard >= 0) PB[selectedCard].BringToFront();
+            label10.BringToFront();
+
+            homeLibrary.Refresh();
+            awayLibrary.Refresh();
+            homeHades.Refresh();
+            cardDetailPB.Refresh();
+
+            label10.Text = core.homeHandNum.ToString();
+            label11.Text = core.homeHadesNum.ToString();
+            homeLife.Value = core.homeLife;
+            homeLifePicture.Refresh();
+            awayLifePicture.Refresh();
+        }
+
+        //============================== 再描画処理(Paint) ==============================
+        // カード
+        private void Card_Paint(object sender, PaintEventArgs e)
+        {
+            // カード情報取得
+            PictureBox pb = (PictureBox)sender;
+            Card card = (Card)(pb.Tag);
+
+            Graphics g = e.Graphics;
+            g.Clear(pb.BackColor);
+            Bitmap img;
+
+            if (card.section == SECTION.HOMEFIELD
+                || card.section == SECTION.HOMEHAND
+                || card.section == SECTION.HOMENODEAREA
+                || card.section == SECTION.AWAYFIELD
+                || card.section == SECTION.AWAYHAND
+                || card.section == SECTION.AWAYNODEAREA)
+            {
+                // カードイメージ作成
+                if (card.open
+                    || (card.section == SECTION.HOMEHAND && !card.open))
+                {
+                    if (cardDB[card.no].bmp != null)
+                    {
+                        img = cardDB[card.no].bmp;
+                    }
+                    else
+                    {
+                        img = VisionFunctions.DrawCard(cardDB, card, CARDSIZEX, CARDSIZEY);
+                    }
+                }
+                else
+                {
+                    img = backImg;
+                }
+
+                Bitmap img2;
+                Graphics g2;
+                // アクティブorスリープで描画
+                if (card.active)
+                {
+                    img2 = new Bitmap(CARDSIZEX, CARDSIZEY);
+                    g2 = Graphics.FromImage(img2);
+                    g2.DrawImage(img, 0, 0, pb.Width, pb.Height);
+                }
+                else
+                {
+                    img2 = new Bitmap(CARDSIZEY, CARDSIZEX);
+                    g2 = Graphics.FromImage(img2);
+                    Point[] pt = new Point[3];
+                    pt[0] = new Point(pb.Width, 0);
+                    pt[1] = new Point(pb.Width, pb.Height);
+                    pt[2] = new Point(0, 0);
+                    g2.DrawImage(img, pt);
+                }
+                if (card.section == SECTION.AWAYFIELD
+                    || card.section == SECTION.AWAYHAND
+                    || card.section == SECTION.AWAYNODEAREA)
+                {
+                    img2.RotateFlip(RotateFlipType.Rotate180FlipNone);
+                }
+                g.DrawImage(img2, 0, 0);
+
+                // カード選択枠描画
+                if (card.id == selectedCard) DrawSelected(pb, g);
+            }
+        }
+
+        // 山札
+        private void homeLibrary_Paint(object sender, PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(awayLibrary.BackColor);
+
+            if (core.homeLibraryNum >= 1)
+            {
+                VisionFunctions.DrawImage_CenterBottom(g, backImg, homeLibrary);
+            }
+            Rectangle area = new Rectangle(homeLibrary.Width - 1 - 40, homeLibrary.Height - 1 - 20, 40, 20);
+            g.FillRectangle(Brushes.White, area);
+            g.DrawRectangle(Pens.Gray, area);
+            StringFormat stringFormat = new StringFormat();
+            stringFormat.Alignment = StringAlignment.Center;
+            stringFormat.LineAlignment = StringAlignment.Center;
+            g.DrawString(core.homeLibraryNum.ToString(), new Font("MS UI Gothic", 12, FontStyle.Bold), Brushes.Black, area, stringFormat);
+        }
+
+        private void awayLibrary_Paint(object sender, PaintEventArgs e)
+        {
+            PictureBox pb = (PictureBox)sender;
+            Graphics g = e.Graphics;
+            g.Clear(awayLibrary.BackColor);
+
+            Bitmap img = new Bitmap(pb.Width, pb.Height);
+            Graphics g2 = Graphics.FromImage(img);
+
+            if (core.awayLibraryNum >= 1)
+            {
+                VisionFunctions.DrawImage_CenterBottom(g2, backImg, homeLibrary);
+            }
+            Rectangle area = new Rectangle(awayLibrary.Width - 1 - 40, awayLibrary.Height - 1 - 20, 40, 20);
+            g2.FillRectangle(Brushes.White, area);
+            g2.DrawRectangle(Pens.Gray, area);
+            StringFormat stringFormat = new StringFormat();
+            stringFormat.Alignment = StringAlignment.Center;
+            stringFormat.LineAlignment = StringAlignment.Center;
+            g2.DrawString(core.awayLibraryNum.ToString(), new Font("MS UI Gothic", 12, FontStyle.Bold), Brushes.Black, area, stringFormat);
+
+            img.RotateFlip(RotateFlipType.Rotate180FlipNone);
+            g.DrawImage(img, 0, 0);
+        }
+
+        // HOME冥界
+        private void homeHades_Paint(object sender, PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(homeHades.BackColor);
+
+            if (core.homeHadesNum > 0)
+            {
+                int id = core.homeHadesOrder[core.homeHadesNum - 1];
+                Bitmap img;
+                if (cardDB[core.cards[id].no].bmp != null)
+                {
+                    img = cardDB[core.cards[id].no].bmp;
+                    VisionFunctions.DrawImage_CenterBottom(g, img, homeHades);
+                }
+                else
+                {
+                    img = VisionFunctions.DrawCard(cardDB, core.cards[id], homeHades.Width - 2, homeHades.Height - 2);
+
+                    g.DrawImage(img, 0, 0);
+                }
+
+                if (selectedCard == -1 && selectedCard == core.homeHadesOrder[core.homeHadesNum - 1])
+                {
+                    DrawSelected(homeHades, g);
+                }
+            }
+        }
+
+        // カード拡大画面
+        private void cardDetailPB_Paint(object sender, PaintEventArgs e)
+        {
+            PictureBox pb = (PictureBox)sender;
+            Graphics g = e.Graphics;
+            g.Clear(pb.BackColor);
+
+            string temptxt = "";
+
+            if (selectedCard != -1)
+            {
+                Card card = core.cards[selectedCard];
+                if (((card.section == SECTION.HOMEFIELD
+                    || card.section == SECTION.HOMENODEAREA
+                    || card.section == SECTION.AWAYFIELD
+                    || card.section == SECTION.AWAYNODEAREA
+                    || card.section == SECTION.AWAYHAND)
+                    && card.open)
+                    || card.section == SECTION.HOMEHAND
+                    || card.section == SECTION.HOMEHADES
+                    || card.section == SECTION.AWAYHADES)
+                {
+                    if (cardDB[card.no].bmp != null)
+                    {
+                        VisionFunctions.DrawImage_CenterBottom(g, cardDB[card.no].bmp, pb);
+                    }
+                    else
+                    {
+                        VisionFunctions.DrawImage_Noimage(g, cardDB[card.no], pb);
+                    }
+
+                    if (cardDB[card.no].skill != "" || cardDB[card.no].upkeep != "")
+                    {
+                        if (cardDB[card.no].skill != "") temptxt += cardDB[card.no].skill;
+                        if (cardDB[card.no].upkeep != "") temptxt += "　維持コスト（" + cardDB[card.no].upkeep + "）";
+                        temptxt += Environment.NewLine;
+                    }
+                    temptxt += cardDB[card.no].ability;
+                    cardDetailAtkDef.Text = (cardDB[card.no].attack + " / ") + cardDB[card.no].toughness;
+                    cardDetailAtkDef.Visible = true;
+                }
+                else
+                {
+                    cardDetailAtkDef.Visible = false;
+                }
+            }
+            else
+            {
+                cardDetailAtkDef.Visible = false;
+            }
+            cardDetailAbility.Text = temptxt;
+            textBox2.Text = temptxt;
+        }
+
+        // ライフカウンタ
+
+        private void homeLifePicture_Paint(object sender, PaintEventArgs e)
+        {
+            PictureBox pb = (PictureBox)sender;
+            Graphics g = e.Graphics;
+            g.Clear(pb.BackColor);
+            g.DrawImage(lifeImg, 0, 0, pb.Width, pb.Height);
+        }
+
+        private void awayLifePicture_Paint(object sender, PaintEventArgs e)
+        {
+            PictureBox pb = (PictureBox)sender;
+            Graphics g = e.Graphics;
+            g.Clear(pb.BackColor);
+
+            Bitmap img = new Bitmap(pb.Width, pb.Height);
+            Graphics g2 = Graphics.FromImage(img);
+
+            g2.DrawImage(lifeImg, 0, 0, pb.Width, pb.Height);
+
+            Rectangle area = new Rectangle(pb.Width - 47, pb.Height - 20, 47 - 1, 20 - 1);
+            g2.FillRectangle(Brushes.White, area);
+            g2.DrawRectangle(Pens.Gray, area);
+            StringFormat stringFormat = new StringFormat();
+            stringFormat.Alignment = StringAlignment.Far;
+            stringFormat.LineAlignment = StringAlignment.Center;
+            area = new Rectangle(pb.Width - 40, pb.Height - 20, 28 - 1, 20 - 1);
+            g2.DrawString(core.awayLife.ToString(), new Font("MS UI Gothic", 10, FontStyle.Bold), Brushes.Black, area, stringFormat);
+
+            Point[] pt = new Point[3];
+            pt[0] = new Point(pb.Width, pb.Height);
+            pt[1] = new Point(0, pb.Height);
+            pt[2] = new Point(pb.Width, 0);
+            g.DrawImage(img, pt);
+        }
+
+        //----------汎用描画関数----------
+        private void DrawSelected(PictureBox pb, Graphics g)
+        {
+            Pen myPen1 = new Pen(Color.FromArgb(0x22, 0x33, 0xaa), 3);
+            g.DrawRectangle(myPen1, 1, 1, pb.Width - 3 - (pb.BorderStyle == BorderStyle.None ? 0 : 2), pb.Height - 3 - (pb.BorderStyle == BorderStyle.None ? 0 : 2));
+            SolidBrush myBrush1 = new SolidBrush(Color.FromArgb(0x44, 0x22, 0x33, 0xaa));
+            g.FillRectangle(myBrush1, 0, 0, pb.Width, pb.Height);
+            myBrush1.Dispose();
+            myPen1.Dispose();
+        }
+
+        //============================== ゲーム進行 ==============================
+        private void StartGame()
+        {
+            int i;
+
+            // カード・コアを初期化
+            VisionFunctions.CardArrayInitialize(core.cards);
+            core.Initialize();
+
+            selectedCard = -1;
+
+            // coreにデッキの情報を書き込み
+            for (i = 0; i < 50; i++)
+            {
+                core.homeLibraryOrder[i] = i;
+                core.cards[i].section = SECTION.HOMELIBRARY;
+
+                core.awayLibraryOrder[i] = 50 + i;
+                core.cards[50 + i].section = SECTION.AWAYLIBRARY;
+            }
+            core.homeLibraryNum = 50;
+            core.awayLibraryNum = 50;
+
+            Shuffle(core.homeLibraryOrder, core.homeLibraryNum);
+            Shuffle(core.awayLibraryOrder, core.awayLibraryNum);
+        }
+
+        private void Shuffle(int[] ary,int ary_length)
+        {
+            int i;
+
+            // Fisher-Yatesアルゴリズムでシャッフルする
+            // 参考：http://blogs.wankuma.com/episteme/archive/2009/07/13/177448.aspx
+            // サーバー側でやってもらうべき？
+            for (i = ary_length - 1; i >= 0; i--)
+            {
+                int rnd = rndGenerator.Next(i);
+                int tmp = ary[rnd];
+                ary[rnd] = ary[i];
+                ary[i] = tmp;
+            }
+        }
+
+        //============================== マウス入出力 ==============================
+        //----------ドラッグ開始----------
+        // カードをドラッグ
+        private void Card_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left || e.Button==MouseButtons.Right){
+                //----------カードクリック - カード選択----------
+                Card cinf = (Card)(((PictureBox)sender).Tag);
+                int selectedCard_old = selectedCard;
+                draggingCard = selectedCard = cinf.id;
+                PB[cinf.id].BringToFront();
+
+                //----------ドラッグ開始----------
+                Control parent = PB[selectedCard].Parent;
+                /*if (parent == homeField || parent == homeHand || parent == homeNodeArea)
+                {*/
+                    dragFrom = core.cards[selectedCard].section;
+                    dragging = true;
+                    diffPoint = new Point(e.X, e.Y);
+                //}
+
+                RedrawAll();
+            }
+        }
+        // 山札からドラッグ
+        private void homeLibrary_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (core.homeLibraryNum > 0)
+            {
+                draggingCard = core.homeLibraryOrder[core.homeLibraryNum - 1];
+                dragFrom = SECTION.HOMELIBRARY;
+                dragging = true;
+                diffPoint = new Point(CARDSIZEX / 2, CARDSIZEY / 2);
+            }
+            RedrawAll();
+        }
+        private void awayLibrary_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (core.awayLibraryNum > 0)
+            {
+                draggingCard = core.awayLibraryOrder[core.awayLibraryNum - 1];
+                dragFrom = SECTION.AWAYLIBRARY;
+                dragging = true;
+                diffPoint = new Point(CARDSIZEX / 2, CARDSIZEY / 2);
+            }
+            RedrawAll();
+        }
+        // 冥界からドラッグ
+        private void homeHades_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (core.homeHadesNum > 0)
+            {
+                selectedCard = draggingCard = core.homeHadesOrder[core.homeHadesNum - 1];
+                dragFrom = SECTION.HOMEHADES;
+                dragging = true;
+                diffPoint = new Point(CARDSIZEX / 2, CARDSIZEY / 2);
+            }
+            RedrawAll();
+        }
+
+        //----------ドラッグ中----------
+        private void Card_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (!dragging) return;
+
+            int temp;
+            Card cinf = (Card)(((PictureBox)sender).Tag);
+            int i = cinf.id;
+
+            //x軸移動処理
+            temp = core.cards[i].Location.X + e.X - diffPoint.X;
+            if (temp > PB[i].Parent.Width - 20)
+            {
+                core.cards[i].Location.X = PB[i].Parent.Width - 20;
+            }
+            else if (temp < 20 - PB[i].Width)
+            {
+                core.cards[i].Location.X = 20 - PB[i].Width;
+            }
+            else
+            {
+                core.cards[i].Location.X = temp;
+            }
+
+            //y軸移動処理
+            temp = PB[i].Top + e.Y - diffPoint.Y;
+            int temp2 = core.cards[i].active ? CARDSIZEY - CARDSIZEX : 0;
+            if (temp > PB[i].Parent.Height - temp2 - 20)
+            {
+                core.cards[i].Location.Y = PB[i].Parent.Height - temp2 - 20;
+            }
+            else if (temp < 20 - PB[i].Height)
+            {
+                core.cards[i].Location.Y = 20 - PB[i].Height;
+            }
+            else
+            {
+                core.cards[i].Location.Y = temp;
+            }
+
+            //描画
+            PB[i].Location = core.cards[i].Location;
+        }
+
+        //----------ドラッグ終了----------
+        private void Card_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left || e.Button == MouseButtons.Right)
+            {
+                // 他のパネルに移動
+                // ----- 隅に行き過ぎないように、移動範囲制限を付けたい・・・
+                if (dragging)
+                {
+                    Point mousePos = System.Windows.Forms.Cursor.Position;
+
+                    // ドラッグ終了情報を変数に
+                    dragging = false;
+
+                    // ドラッグ先
+                    SECTION dragTo = SECTION.NONE;
+                    if (new Rectangle(homeField.PointToScreen(new Point(0, 0)), homeField.Size).Contains(mousePos)) dragTo = SECTION.HOMEFIELD;
+                    else if (new Rectangle(homeHand.PointToScreen(new Point(0, 0)), homeHand.Size).Contains(mousePos)) dragTo = SECTION.HOMEHAND;
+                    else if (new Rectangle(homeLibrary.PointToScreen(new Point(0, 0)), homeLibrary.Size).Contains(mousePos)) dragTo = SECTION.HOMELIBRARY;
+                    else if (new Rectangle(homeHades.PointToScreen(new Point(0, 0)), homeHades.Size).Contains(mousePos)) dragTo = SECTION.HOMEHADES;
+                    else if (new Rectangle(homeNodeArea.PointToScreen(new Point(0, 0)), homeNodeArea.Size).Contains(mousePos)) dragTo = SECTION.HOMENODEAREA;
+                    else if (new Rectangle(awayField.PointToScreen(new Point(0, 0)), awayField.Size).Contains(mousePos)) dragTo = SECTION.AWAYFIELD;
+                    else if (new Rectangle(awayHand.PointToScreen(new Point(0, 0)), awayHand.Size).Contains(mousePos)) dragTo = SECTION.AWAYHAND;
+                    else if (new Rectangle(awayLibrary.PointToScreen(new Point(0, 0)), awayLibrary.Size).Contains(mousePos)) dragTo = SECTION.AWAYLIBRARY;
+                    
+                    if (!(dragTo == SECTION.HOMELIBRARY && dragFrom == SECTION.HOMELIBRARY)) selectedCard = draggingCard;
+
+                    //----------HOMEドラッグ処理----------
+                    if (dragTo == SECTION.HOMEFIELD)
+                    {
+                        core.cards[selectedCard].section = SECTION.HOMEFIELD;
+                        core.cards[selectedCard].Location = VisionFunctions.subPoint(homeField.PointToClient(mousePos), diffPoint);
+                        if (dragFrom != SECTION.HOMEFIELD)
+                        {
+                            core.homeFieldOrder[core.homeFieldNum] = selectedCard;
+                            core.homeFieldNum++;
+                        }
+
+                        if (dragFrom == SECTION.HOMEHAND)
+                        {
+                            core.cards[selectedCard].open = true;
+                            if (cardDB[core.cards[selectedCard].no].type == "Character")
+                            {
+                                if (cardDB[core.cards[selectedCard].no].skill.IndexOf("速攻") != -1)
+                                {
+                                    core.cards[selectedCard].active = true;
+                                }
+                                else
+                                {
+                                    core.cards[selectedCard].active = false;
+                                }
+                            }
+                        }
+                    }
+                    if (dragTo == SECTION.HOMEHAND)
+                    {
+                        core.cards[selectedCard].section = SECTION.HOMEHAND;
+                        core.cards[selectedCard].active = true;
+                        core.cards[selectedCard].open = false;
+                        core.cards[selectedCard].Location = VisionFunctions.subPoint(homeHand.PointToClient(mousePos), diffPoint);
+                        if (dragFrom != SECTION.HOMEHAND)
+                        {
+                            core.homeHandOrder[core.homeHandNum] = selectedCard;
+                            core.homeHandNum++;
+                        }
+                    }
+                    if (dragTo == SECTION.HOMENODEAREA)
+                    {
+                        core.cards[selectedCard].section = SECTION.HOMENODEAREA;
+                        PB[selectedCard].Parent = homeNodeArea;
+                        core.cards[selectedCard].Location = VisionFunctions.subPoint(homeNodeArea.PointToClient(mousePos), diffPoint);
+                        if (dragFrom != SECTION.HOMENODEAREA)
+                        {
+                            core.cards[selectedCard].open = false;
+                            if (core.cards[selectedCard].open) core.cards[selectedCard].active = true;
+                            core.homeNodeNum++;
+                        }
+                    }
+                    if (dragTo == SECTION.HOMELIBRARY)
+                    {
+                        core.cards[draggingCard].section = SECTION.HOMELIBRARY;
+                        if (dragFrom != SECTION.HOMELIBRARY)
+                        {
+                            core.homeLibraryOrder[core.homeLibraryNum] = draggingCard;
+                            core.homeLibraryNum++;
+                        }
+                    }
+                    if (dragTo == SECTION.HOMEHADES)
+                    {
+                        core.cards[selectedCard].section = SECTION.HOMEHADES;
+                        core.cards[selectedCard].active = true;
+                        core.cards[selectedCard].open = true;
+                        if (dragFrom == SECTION.HOMEHADES)
+                        {
+                            selectedCard = core.homeHadesOrder[core.homeHadesNum - 1];
+                        }
+                        else
+                        {
+                            core.homeHadesOrder[core.homeHadesNum] = selectedCard;
+                            core.homeHadesNum++;
+                        }
+                    }
+
+                    //----------AWAYドラッグ処理-----------
+                    if (dragTo == SECTION.AWAYFIELD)
+                    {
+                        core.cards[selectedCard].section = SECTION.AWAYFIELD;
+                        core.cards[selectedCard].Location = VisionFunctions.subPoint(awayField.PointToClient(mousePos), diffPoint);
+                        if (dragFrom != SECTION.AWAYFIELD)
+                        {
+                            core.awayFieldOrder[core.awayFieldNum] = selectedCard;
+                            core.awayFieldNum++;
+                        }
+
+                        if (dragFrom == SECTION.AWAYHAND)
+                        {
+                            core.cards[selectedCard].open = true;
+                            if (cardDB[core.cards[selectedCard].no].type == "Character")
+                            {
+                                if (cardDB[core.cards[selectedCard].no].skill.IndexOf("速攻") != -1)
+                                {
+                                    core.cards[selectedCard].active = true;
+                                }
+                                else
+                                {
+                                    core.cards[selectedCard].active = false;
+                                }
+                            }
+                        }
+                    }
+                    if (dragTo == SECTION.AWAYHAND)
+                    {
+                        core.cards[selectedCard].section = SECTION.AWAYHAND;
+                        core.cards[selectedCard].active = true;
+                        core.cards[selectedCard].open = false;
+                        core.cards[selectedCard].Location = VisionFunctions.subPoint(awayHand.PointToClient(mousePos), diffPoint);
+                        if (dragFrom != SECTION.AWAYHAND)
+                        {
+                            core.awayHandOrder[core.awayHandNum] = selectedCard;
+                            core.awayHandNum++;
+                        }
+                    }
+                    if (dragTo == SECTION.AWAYLIBRARY)
+                    {
+                        core.cards[draggingCard].section = SECTION.AWAYLIBRARY;
+                        if (dragFrom != SECTION.AWAYLIBRARY)
+                        {
+                            core.awayLibraryOrder[core.awayLibraryNum] = draggingCard;
+                            core.awayLibraryNum++;
+                        }
+                    }
+
+                    //----------～からの処理----------
+                    // フィールドからの処理
+                    if (dragFrom == SECTION.HOMEFIELD && dragTo != SECTION.HOMEFIELD && dragTo != SECTION.NONE)
+                    {
+                        int i;
+                        for (i = 0; i < core.homeFieldNum; i++)
+                        {
+                            if (core.homeFieldOrder[i] == selectedCard)
+                            {
+                                for (; i < core.homeFieldNum - 1; i++)
+                                {
+                                    core.homeFieldOrder[i] = core.homeFieldOrder[i + 1];
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if (dragFrom == SECTION.AWAYFIELD && dragTo != SECTION.AWAYFIELD && dragTo != SECTION.NONE)
+                    {
+                        int i;
+                        for (i = 0; i < core.awayFieldNum; i++)
+                        {
+                            if (core.awayFieldOrder[i] == selectedCard)
+                            {
+                                for (; i < core.awayFieldNum - 1; i++)
+                                {
+                                    core.awayFieldOrder[i] = core.awayFieldOrder[i + 1];
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    // 手札からの処理
+                    if (dragFrom == SECTION.HOMEHAND && dragTo != SECTION.HOMEHAND && dragTo != SECTION.NONE)
+                    {
+                        int i;
+                        for (i = 0; i < core.homeHandNum; i++)
+                        {
+                            if (core.homeHandOrder[i] == selectedCard) break;
+                        }
+                        for (; i < core.homeHandNum - 1; i++)
+                        {
+                            core.homeHandOrder[i] = core.homeHandOrder[i + 1];
+                        }
+                        core.homeHandNum--;
+                    }
+                    if (dragFrom == SECTION.AWAYHAND && dragTo != SECTION.AWAYHAND && dragTo != SECTION.NONE)
+                    {
+                        int i;
+                        for (i = 0; i < core.awayHandNum; i++)
+                        {
+                            if (core.awayHandOrder[i] == selectedCard) break;
+                        }
+                        for (; i < core.awayHandNum - 1; i++)
+                        {
+                            core.awayHandOrder[i] = core.awayHandOrder[i + 1];
+                        }
+                        core.awayHandNum--;
+                    }
+                    // ノードからの処理
+                    if (dragFrom == SECTION.HOMENODEAREA && dragTo != SECTION.HOMENODEAREA && dragTo != SECTION.NONE)
+                    {
+                        core.homeNodeNum--;
+                    }
+                    // 山札からの処理
+                    if (dragFrom == SECTION.HOMELIBRARY && dragTo != SECTION.NONE && dragTo != SECTION.HOMELIBRARY)
+                    {
+                        core.homeLibraryNum--;
+                    }
+                    if (dragFrom == SECTION.AWAYLIBRARY && dragTo != SECTION.NONE && dragTo != SECTION.AWAYLIBRARY)
+                    {
+                        core.awayLibraryNum--;
+                    }
+                    // 冥界からの処理
+                    if (dragFrom == SECTION.HOMEHADES && dragTo != SECTION.NONE && dragTo != SECTION.HOMEHADES)
+                    {
+                        core.homeHadesNum--;
+                    }
+
+                    //描画
+                    RedrawAll();
+                }
+
+                // ドラッグ終了情報を変数に
+                dragging = false;
+            }
+        }
+
+        // 山札をダブルクリック → 手札へ
+        private void homeLibrary_DoubleClick(object sender, EventArgs e)
+        {
+            if (core.homeLibraryNum == 0) return;
+
+            selectedCard = draggingCard = core.homeLibraryOrder[core.homeLibraryNum - 1];
+
+            core.cards[selectedCard].section = SECTION.HOMEHAND;
+            core.cards[selectedCard].open = true;
+            core.cards[selectedCard].active = true;
+            core.homeLibraryNum--;
+            core.homeHandOrder[core.homeHandNum] = selectedCard;
+            core.homeHandNum++;
+
+            //描画
+            RedrawAll();
+        }
+
+        //----------山札を右クリック----------
+        private void 場に裏向きカードを1枚出すToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (core.homeLibraryNum == 0) return;
+            selectedCard = core.homeLibraryOrder[core.homeLibraryNum - 1];
+
+            core.cards[selectedCard].section = SECTION.HOMEFIELD;
+            core.cards[selectedCard].Location = new Point(10,10);
+            core.cards[selectedCard].open = false;
+            core.homeLibraryNum--;
+
+            RedrawAll();
+        }
+
+        // フィールドクリック - カード選択解除
+        private void field_MouseDown(object sender, MouseEventArgs e)
+        {
+            selectedCard = -1;
+            RedrawAll();
+        }
+
+        //============================== ファイル入出力 ==============================
+        //----------cardlist.ini読み込み----------
+        private void ReadCardlist()
+        {
+            string fname = @"card\\cardlist.ini";
+            if (!System.IO.File.Exists(fname))
+            {
+                MessageBox.Show("cardlist.iniの読み込みに失敗しました。");
+                return;
+            }
+
+            string line;
+            //string text1 = ""; //デバッグ用
+            int now_no = 0;
+
+            System.IO.StreamReader reader = new System.IO.StreamReader(fname, Encoding.Default);
+            while (!reader.EndOfStream)
+            {
+                int n;
+                line = reader.ReadLine();
+
+                if (line.Length == 0) continue; //空白行
+                if (line[0] == '#') continue;   //コメントアウト
+                if (line[0] == '[')             //[]付きカードナンバー
+                {
+                    if (int.TryParse(line.Substring(1,line.Length - 2), out n))
+                    {
+                        //[n]であった場合
+                        //text1 += "\r\n" + string.Format("{0,4}", n); //デバッグ用
+                        if (n == 0) continue;
+                        now_no = n; //now_noをセット
+                        cardDB[n] = new CardDB();
+                        cardDB[n].no = n;
+                        continue;
+                    }
+                    else
+                    {
+                        now_no = 0; //now_noを無効数字に
+                        //text1 += line; //デバッグ用
+                        continue;
+                    }
+                }
+                if (now_no == 0) continue;
+
+                switch (line.Substring(0, line.IndexOf("=")))
+                {
+                    case "Type":
+                        cardDB[now_no].type = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "t"; //デバッグ用
+                        break;
+                    case "Glaze":
+                        cardDB[now_no].graze = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "g"; //デバッグ用
+                        break;
+                    case "Node":
+                        cardDB[now_no].node = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "n"; //デバッグ用
+                        break;
+                    case "Cost":
+                        cardDB[now_no].cost = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "c"; //デバッグ用
+                        break;
+                    case "Range":
+                        cardDB[now_no].range = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "r"; //デバッグ用
+                        break;
+                    case "Time":
+                        cardDB[now_no].time = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "t"; //デバッグ用
+                        break;
+                    case "User":
+                        cardDB[now_no].user = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "u"; //デバッグ用
+                        break;
+                    case "Name":
+                        cardDB[now_no].name = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "n"; //デバッグ用
+                        break;
+                    case "Class":
+                        cardDB[now_no].cclass = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "c"; //デバッグ用
+                        break;
+                    case "Skill":
+                        cardDB[now_no].skill = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "s"; //デバッグ用
+                        break;
+                    case "Upkeep":
+                        cardDB[now_no].upkeep = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "u"; //デバッグ用
+                        break;
+                    case "Ability":
+                        cardDB[now_no].ability = line.Substring(line.IndexOf("=") + 1);
+                        cardDB[now_no].ability = cardDB[now_no].ability.Replace("\\n", Environment.NewLine + Environment.NewLine ); //改行文字を変換
+                        //text1 += "a"; //デバッグ用
+                        break;
+                    case "Attack":
+                        cardDB[now_no].attack = line.Substring(line.IndexOf("=") + 1);
+                        if (cardDB[now_no].attack == "") cardDB[now_no].attack = "-";
+                        //text1 += "a"; //デバッグ用
+                        break;
+                    case "Toughness":
+                        cardDB[now_no].toughness = line.Substring(line.IndexOf("=") + 1);
+                        if (cardDB[now_no].toughness == "") cardDB[now_no].toughness = "-";
+                        //text1 += "t"; //デバッグ用
+                        break;
+                    case "Text":
+                        cardDB[now_no].text = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "t"; //デバッグ用
+                        break;
+                    case "Illustration":
+                        cardDB[now_no].illustration = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "i"; //デバッグ用
+                        break;
+                    case "File":
+                        cardDB[now_no].fname = line.Substring(line.IndexOf("=") + 1);
+                        //text1 += "f"; //デバッグ用
+                        break;
+                    default:
+                        //text1 += "_"; //デバッグ用
+                        break;
+                }
+            }
+            //textBox1.Text = text1; //デバッグ用
+            reader.Close();
+        }
+
+        //----------デッキ読み込み----------
+        private void ReadDeck(string fname, int start)
+        {
+            int i;
+
+            //string text1 = ""; //デバッグ用
+            string line;
+            string[] field;
+            int n, m;
+            int cnt = 0;
+
+            System.IO.StreamReader reader = new System.IO.StreamReader(fname, Encoding.Default);
+            while (!reader.EndOfStream)
+            {
+                line = reader.ReadLine();
+                field = line.Split(',');
+
+                // fieldにデータが2つ以上ない場合
+                if (field.Length < 2)
+                {
+                    if (cnt == 0)
+                    {
+                        continue;
+                    }
+                    else break;
+                }
+                //text1 += field[0] + " " + field[1] + "\r\n"; //デバッグ用
+
+                if (int.TryParse(field[0], out n) && int.TryParse(field[1], out m))
+                {
+                    if (n > 50) continue;
+                    for (i = 0; i < n; i++)
+                    {
+                        if (cnt >= 50)
+                        {
+                            MessageBox.Show("デッキの枚数が50枚をこえています。");
+                            break;
+                        }
+                        core.cards[start + cnt].no = m;
+                        cnt++;
+                    }
+
+                    // CardDBに画像の読み込み
+                    if (cardDB[m].bmp == null)
+                    {
+                        fname = @"card\\" + cardDB[m].fname;
+                        if (System.IO.File.Exists(fname))
+                        {
+                            cardDB[m].bmp = new Bitmap(fname);
+                        }
+                    }
+                }
+                if (cnt > 50) break;
+            }
+
+            reader.Close();
+            //textBox1.Text = text1; //デバッグ用
+
+            // カード・コアを初期化
+            VisionFunctions.CardArrayInitialize(core.cards);
+            core.Initialize();
+            selectedCard = -1;
+        }
+
+        //============================== その他 ==============================
+        //----------ボタンクリック----------
+        private void button1_Click(object sender, EventArgs e)
+        {
+            openFileDialog1.Filter = "画像ファイル(*.bmp, *.jpg, *.png)|*.bmp;.jpg;*.png";
+            if (openFileDialog1.ShowDialog() == DialogResult.OK)
+            {
+                backImg = new Bitmap(openFileDialog1.FileName);
+            }
+        }
+
+        private void button2_Click(object sender, EventArgs e)
+        {
+            Program.ClientSend(core);
+        }
+
+        private void button4_Click(object sender, EventArgs e)
+        {
+            int i;
+            for (i = 0; i < 50; i++)
+            {
+                core.cards[i].section = SECTION.HOMEFIELD;
+                PB[i].Visible = cardDB[core.cards[i].no].bmp != null ? true : false;
+                PB[i].Location = core.cards[i].Location = new Point(CARDSIZEX * (i % 10), 48 * (i / 10));
+                PB[i].BringToFront();
+            }
+            RedrawAll();
+        }
+
+        //-----------カード右クリック----------
+        // スリープにする
+        private void スリープにするToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (core.cards[selectedCard].active)
+            {
+                core.cards[selectedCard].active = false;
+                core.cards[selectedCard].Location.Y += CARDSIZEY - CARDSIZEX;
+
+                RedrawAll(); //描画
+            }
+        }
+        // アクティブにする
+        private void アクティブにするToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (!core.cards[selectedCard].active)
+            {
+                core.cards[selectedCard].active = true;
+                core.cards[selectedCard].Location.Y -= CARDSIZEY - CARDSIZEX;
+                
+                RedrawAll(); //描画
+            }
+        }
+        // 裏向きにする
+        private void 裏向きにするToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            core.cards[selectedCard].open = false;
+
+            RedrawAll(); //描画
+        }
+        //表向きにする
+        private void 表向きにするToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            core.cards[selectedCard].open = true;
+
+            RedrawAll(); //描画
+        }
+
+        //----------終了時割り込み----------
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            /*if (MessageBox.Show("対戦中ですが、終了してよろしいですか？", "確認", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.Cancel)
+            {
+                e.Cancel = true;
+            }*/
+        }
+
+        //ライフ変更反映
+        private void homeLife_ValueChanged(object sender, EventArgs e)
+        {
+            core.homeLife = (int)homeLife.Value;
+        }
+
+        //冥界をダブルクリック
+        private void homeHades_DoubleClick(object sender, EventArgs e)
+        {
+            fm2 = new Form2(cardDB, core.cards, core.homeHadesOrder, core.homeHadesNum);
+            fm2.ShowDialog();
+            fm2.Dispose();
+            dragging = false;
+        }
+
+        //----------メニュー----------
+        private void ゲーム開始ToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            string fname;
+            openFileDialog1.Filter = "テキストファイル (*.txt)|*.txt|deckファイル (*.deck)|*.deck";
+            if (openFileDialog1.ShowDialog() != DialogResult.OK) return;
+            fname = openFileDialog1.FileName;
+
+            // デッキを読み込み
+            try
+            {
+                ReadDeck(fname, 0);
+                ReadDeck(fname, 50);
+            }
+            catch (Exception)
+            {
+                MessageBox.Show("デッキの読み込みに失敗しました。");
+                return;
+            }
+
+            fm3 = new Form3();
+            if (fm3.ShowDialog() == DialogResult.OK)
+            {
+                bool host = fm3.host;
+                int port = fm3.port;
+                string ip = fm3.ip;
+
+                if (host)
+                {
+                    //サーバーを作成
+                    if (Program.OpenServer(port) == false)
+                    {
+                        MessageBox.Show("サーバーの作成に失敗しました。");
+                        return;
+                    }
+                    textBox1.Text += "サーバーを作成しました。" + Environment.NewLine;
+
+                    //クライアントを立てて、localhostとして接続
+                    if (Program.OpenClient("localhost", port) == false)
+                    {
+                        MessageBox.Show("サーバーへの接続に失敗しました。");
+                        return;
+                    }
+                }
+                else
+                {
+                    if (Program.OpenClient(ip, port) == false) MessageBox.Show("サーバーへの接続に失敗しました。");
+                }
+
+                StartGame();
+                RedrawAll();
+            }
+            fm3.Dispose();
+        }
+
+        //============================== publicメソッド ==============================
+        private delegate void Chat_Add_Delegate(string str);
+
+        public void Chat_Add(string text)
+        {
+            // 別Threadから処理が飛んできた場合はInvoke
+            if (InvokeRequired)
+            {
+                Invoke(new Chat_Add_Delegate(Chat_Add), text);
+                return;
+            }
+            this.textBox1.Text += text +Environment.NewLine;
+        }
+
+        private void Chat_Submit()
+        {
+            string sendStr = textBox3.Text;
+            if (sendStr.Length > 0)
+            {
+                Program.ClientSend(sendStr);
+            }
+            textBox3.Text = "";
+        }
+
+        private void textBox3_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                Chat_Submit();
+            }
+        }
+
+        private void Chat_SubmitBtn_Click(object sender, EventArgs e)
+        {
+            Chat_Submit();
+        }
+
+        private void textBox1_TextChanged(object sender, EventArgs e)
+        {
+            textBox1.SelectionStart = textBox1.Text.Length;
+            textBox1.ScrollToCaret();
+            textBox1.Refresh();
+        }
+
+        public void setNetvisionCore(NetvisionCore setCore)
+        {
+            core.setAll(setCore);
+            RedrawAll();
+        }
+    }
+
+    //============================== 定数 ==============================
+    public enum SECTION
+    {
+        NONE,
+        HOMEFIELD,
+        AWAYFIELD,
+        HOMEHAND,
+        AWAYHAND,
+        HOMELIBRARY,
+        AWAYLIBRARY,
+        HOMEHADES,
+        AWAYHADES,
+        HOMENODEAREA,
+        AWAYNODEAREA
+    }
+
+    //============================== クラス宣言 ==============================
+    // Card : カードの情報を格納
+    [Serializable]
+    public class Card
+    {
+        public int id; // ゲーム中でのカードのid
+        public int no; // カードNo.
+        public bool open;
+        public bool active;
+        public bool reverse;
+        public bool owner;
+        public Point Location;
+        public SECTION section;
+
+        public Card(int id, int no)
+        {
+            this.id = id;
+            this.no = no;
+            this.Initialize();
+        }
+
+        public void Initialize()
+        {
+            this.open = true;
+            this.active = true;
+            this.reverse = false;
+            this.owner = true;
+            this.Location = new Point(0, 0);
+            this.section = SECTION.NONE;
+        }
+
+        public void setAll(Card setCard)
+        {
+            id = setCard.id;
+            no = setCard.no;
+            open = setCard.open;
+            active = setCard.active;
+            reverse = setCard.reverse;
+            owner = setCard.owner;
+            Location.X = setCard.Location.X;
+            Location.Y = setCard.Location.Y;
+            section = setCard.section;
+        }
+    }
+
+    // CardDB : cardlist.iniの情報,カードの画像データを格納
+    public class CardDB
+    {
+        public int no;
+        public string type; //カード種類
+        public string graze; //グレイズ
+        public string node; //必要ノード
+        public string cost; //必要コスト
+        public string range; //効果範囲
+        public string time; //発動期間
+        public string user; //スペカ術者
+        public string name; //カード名
+        public string cclass; //種族
+        public string skill; //キャラクター能力
+        public string upkeep; //維持コスト
+        public string ability; //効果
+        public string attack; //攻撃力
+        public string toughness; //耐久力
+        public string text; //フレーバーテキスト
+        public string illustration; //絵師
+        public string fname; //画像パス
+        public Bitmap bmp;
+
+        public CardDB()
+        {
+            no = 0;
+            type = "";
+            graze = "";
+            node = "";
+            cost = "";
+            range = "";
+            time = "";
+            user = "";
+            name = "";
+            cclass = "";
+            skill = "";
+            upkeep = "";
+            ability = "";
+            attack = "";
+            toughness = "";
+            text = "";
+            illustration = "";
+            fname = "";
+        }
+    }
+
+    // NetvisionCore : 場の持つ情報
+    [Serializable]
+    public class NetvisionCore
+    {
+        //Card.idを配列で格納
+        public int[] homeFieldOrder = new int[100];
+        public int homeFieldNum;
+        public int[] homeLibraryOrder = new int[100];
+        public int homeLibraryNum;
+        public int[] homeHadesOrder = new int[100];
+        public int homeHadesNum;
+        public int[] homeHandOrder = new int[100];
+        public int homeHandNum;
+        public int homeNodeNum;
+        public int homeLife;
+
+        public FieldData home;
+        public FieldData away;
+
+        public int[] awayFieldOrder = new int[100];
+        public int awayFieldNum;
+        public int[] awayLibraryOrder = new int[100];
+        public int awayLibraryNum;
+        public int[] awayHadesOrder = new int[100];
+        public int awayHadesNum;
+        public int[] awayHandOrder = new int[100];
+        public int awayHandNum;
+        public int awayNodeNum;
+        public int awayLife;
+
+        public Card[] cards = new Card[100];
+
+        public NetvisionCore()
+        {
+            Initialize();
+        }
+
+        public void Initialize()
+        {
+            home = new FieldData();
+            away = new FieldData();
+
+            homeLibraryNum = 0;
+            homeFieldNum = 0;
+            homeNodeNum = 0;
+            homeHandNum = 0;
+            homeHadesNum = 0;
+            homeLife = 25;
+
+            awayLibraryNum = 0;
+            awayFieldNum = 0;
+            awayNodeNum = 0;
+            awayHandNum = 0;
+            awayHadesNum = 0;
+            awayLife = 25;
+        }
+
+        public void setAll(NetvisionCore setCore){
+            int i;
+            for (i = 0; i < 100; i++)
+            {
+                homeFieldOrder[i] = setCore.homeFieldOrder[i];
+                homeLibraryOrder[i] = setCore.homeLibraryOrder[i];
+                homeHadesOrder[i] = setCore.homeHadesOrder[i];
+                homeHandOrder[i] = setCore.homeHandOrder[i];
+
+                awayFieldOrder[i] = setCore.awayFieldOrder[i];
+                awayLibraryOrder[i] = setCore.awayLibraryOrder[i];
+                awayHadesOrder[i] = setCore.awayHadesOrder[i];
+                awayHandOrder[i] = setCore.awayHandOrder[i];
+
+                cards[i].setAll(setCore.cards[i]);
+            }
+            homeFieldNum = setCore.homeFieldNum;
+            homeLibraryNum = setCore.homeLibraryNum;
+            homeHadesNum = setCore.homeHadesNum;
+            homeHandNum = setCore.homeHandNum;
+            homeNodeNum = setCore.homeNodeNum;
+            homeLife = setCore.homeLife;
+
+            awayFieldNum = setCore.awayFieldNum;
+            awayLibraryNum = setCore.awayLibraryNum;
+            awayHadesNum = setCore.awayHadesNum;
+            awayHandNum = setCore.awayHandNum;
+            homeNodeNum = setCore.homeNodeNum;
+            awayLife = setCore.awayLife;
+        }
+    }
+
+    public class FieldData
+    {
+        public int[] fieldOrder = new int[100];
+        public int fieldNum;
+        public int[] libraryOrder = new int[100];
+        public int libraryNum;
+        public int[] hadesOrder = new int[100];
+        public int hadesNum;
+        public int[] handOrder = new int[100];
+        public int handNum;
+        public int nodeNum;
+        public int life;
+
+        public FieldData()
+        {
+            Initialize();
+        }
+
+        public void Initialize()
+        {
+            libraryNum = 0;
+            fieldNum = 0;
+            nodeNum = 0;
+            handNum = 0;
+            hadesNum = 0;
+            life = 25;
+        }
+
+        public void setAll(FieldData setData)
+        {
+            int i;
+            for (i = 0; i < 100; i++)
+            {
+                fieldOrder[i] = setData.fieldOrder[i];
+                libraryOrder[i] = setData.libraryOrder[i];
+                hadesOrder[i] = setData.hadesOrder[i];
+                handOrder[i] = setData.handOrder[i];
+            }
+            fieldNum = setData.fieldNum;
+            libraryNum = setData.libraryNum;
+            hadesNum = setData.hadesNum;
+            handNum = setData.handNum;
+            nodeNum = setData.nodeNum;
+            life = setData.life;
+        }
+    }
+
+    //============================== 汎用関数 ===============================
+    static class VisionFunctions
+    {
+        // Card配列の初期化
+        public static void CardArrayInitialize(Card[] cards)
+        {
+            int i;
+            for (i = 0; i < 50; i++) cards[i].Initialize();
+        }
+
+        // Point加算
+        public static Point addPoint(Point point1, Point point2)
+        {
+            int x = 0;
+            int y = 0;
+            Point result = new Point(x, y);
+            result.X = point1.X + point2.X;
+            result.Y = point1.Y + point2.Y;
+            return result;
+        }
+
+        // Point減算
+        public static Point subPoint(Point point1, Point point2)
+        {
+            int x = 0;
+            int y = 0;
+            Point result = new Point(x, y);
+            result.X = point1.X - point2.X;
+            result.Y = point1.Y - point2.Y;
+            return result;
+        }
+
+        //----------汎用描画関数----------
+        // ピクチャボックスの中央下にimgを描画
+        public static void DrawImage_CenterBottom(Graphics g, Bitmap img, PictureBox pb)
+        {
+            Point[] pt = new Point[3];
+            double imgW = (double)img.Width;
+            double imgH = (double)img.Height;
+            double pbW = (double)pb.Width;
+            double pbH = (double)pb.Height;
+
+            if (imgH / imgW > pbH / pbW)
+            {
+                int w = (int)(imgW * (pbH / imgH));
+                int h = (int)pbH;
+                int temp = (((int)pbW - w) / 2);
+                pt[0] = new Point(temp, 0);
+                pt[1] = new Point(temp + w, 0);
+                pt[2] = new Point(temp, h);
+            }
+            else
+            {
+                int w = (int)pbW;
+                int h = (int)(imgH * (pbW / imgW));
+                int temp = (int)pbH - h;
+                pt[0] = new Point(0, temp);
+                pt[1] = new Point(w, temp);
+                pt[2] = new Point(0, (int)pbH);
+            }
+            g.DrawImage(img, pt);
+        }
+
+        // カード画像がない場合のカードの描画
+        public static Bitmap DrawCard(CardDB[] cardDB,Card card, int w, int h)
+        {
+            Bitmap img;
+            Rectangle area;
+            img = new Bitmap(w, h);
+
+            Graphics g = Graphics.FromImage(img);
+            g.FillRectangle(Brushes.White, 0, 0, w, h);
+            Pen pen = new Pen(Brushes.Black, 3);
+            if (cardDB[card.no].type == "Character") pen.Brush = Brushes.Aquamarine;
+            if (cardDB[card.no].type == "Spell") pen.Brush = Brushes.OrangeRed;
+            if (cardDB[card.no].type == "Command") pen.Brush = Brushes.Gray;
+            g.DrawRectangle(pen, 1, 1, w - 3, h - 3);
+            g.DrawRectangle(new Pen(Brushes.Black, 1), 0, 0, w - 1, h - 1);
+            area = new Rectangle(3, h / 2, w - 6, h / 2 - 15);
+            g.DrawString(cardDB[card.no].name, new Font("MS UI Gothic", 8), Brushes.Black, area);
+            area = new Rectangle(4, h - 13, w - 8, 10);
+            StringFormat stringFormat = new StringFormat();
+            stringFormat.Alignment = StringAlignment.Far;
+            stringFormat.LineAlignment = StringAlignment.Center;
+            g.DrawString(cardDB[card.no].attack + " / " + cardDB[card.no].toughness, new Font("MS UI Gothic", 8), Brushes.Black, area, stringFormat);
+            area = new Rectangle(4, 5, w - 8, 15);
+            g.DrawString("N " + cardDB[card.no].node + "  C " + cardDB[card.no].cost, new Font("MS UI Gothic", 8), Brushes.Black, area, stringFormat);
+            g.Dispose();
+            return img;
+        }
+
+        public static void DrawImage_Noimage(Graphics g, CardDB cardDB, PictureBox pb)
+        {
+            g.DrawString(cardDB.name, new Font("MS UI Gothic", 12, FontStyle.Bold), Brushes.Black, 6, 272);
+            g.DrawString("N " + cardDB.node + " C " + cardDB.cost, new Font("MS UI Gothic", 16, FontStyle.Bold), Brushes.Black, 185, 28);
+            Rectangle area = new Rectangle(10, 5, pb.Width - 20, 16);
+            StringFormat centering = new StringFormat();
+            centering.Alignment = StringAlignment.Center;
+            centering.LineAlignment = StringAlignment.Center;
+            g.DrawString(cardDB.type + " Card", new Font("Century", 11), Brushes.Black, area, centering);
+            g.DrawString(string.Format("No.{0:D4}", cardDB.no), new Font("Century Gothic", 8, FontStyle.Bold), Brushes.Black, 120, 378);
+            if (cardDB.type == "Character")
+            {
+                g.DrawString("GRAZE", new Font("MS UI Gothic", 12, FontStyle.Bold), Brushes.Black, 12, 28);
+                g.DrawString(cardDB.graze, new Font("MS UI Gothic", 26, FontStyle.Bold), Brushes.Black, 24, 42);
+                g.DrawString(cardDB.cclass, new Font("MS UI Gothic", 10), Brushes.Black, 210, 275);
+            }
+        }
+    }
+}
