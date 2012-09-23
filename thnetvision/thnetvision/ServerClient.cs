@@ -7,6 +7,7 @@ namespace TCP_async
 {
     /// <summary>
     /// TCP_asyncの例外
+    /// 
     /// </summary>
     public class TcpException : System.Exception
     {
